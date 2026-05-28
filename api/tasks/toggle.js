@@ -14,27 +14,23 @@ export default async function handler(req, res) {
     }
   }
 
-  const { key, userName } = body || {}
-  if (!key) {
-    return res.status(400).json({ error: 'Missing task key' })
+  const { key, userName, isChecked } = body || {}
+  if (!key || typeof isChecked !== 'boolean') {
+    return res.status(400).json({ error: 'Missing task key or isChecked boolean' })
   }
 
   try {
     const ref = db.doc('homeos/tasks')
-    const snap = await ref.get()
-    const data = snap.exists ? snap.data() : {}
-    const isChecked = !data[key]
     const now = new Date()
     const time = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) +
       ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
 
     const update = {
-      ...data,
       [key]: isChecked,
       [`${key}__meta`]: isChecked ? { by: userName || 'Team', at: time } : null,
     }
 
-    await ref.set(update)
+    await ref.set(update, { merge: true })
     return res.status(200).json(update)
   } catch (error) {
     console.error('Failed to toggle task:', error)

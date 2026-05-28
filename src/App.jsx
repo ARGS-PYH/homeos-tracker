@@ -279,12 +279,23 @@ export default function App() {
 
   useEffect(() => {
     if (!authed) return
-    loadTasks()
-    const interval = setInterval(loadTasks, 2000)
+    let active = true
+    let timer = null
+
+    const poll = async () => {
+      if (!active) return
+      await loadTasks()
+      if (!active) return
+      timer = setTimeout(poll, 4000)
+    }
+
+    poll()
     const onFocus = () => loadTasks()
     window.addEventListener('focus', onFocus)
+
     return () => {
-      clearInterval(interval)
+      active = false
+      if (timer) clearTimeout(timer)
       window.removeEventListener('focus', onFocus)
     }
   }, [authed, loadTasks])
@@ -310,7 +321,7 @@ export default function App() {
       const response = await fetch('/api/tasks/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, userName: name })
+        body: JSON.stringify({ key, userName: name, isChecked })
       })
       if (!response.ok) throw new Error('Failed to toggle task')
       const data = await response.json()
