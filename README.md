@@ -97,6 +97,56 @@ npx vercel dev
 
 ---
 
+## Deploy to Render (free web service)
+
+If you prefer Render, the repository now includes a Node entrypoint (`server.js`) that serves the built frontend plus the API routes.
+
+### Render deployment
+
+1. In Render, create a new **Web Service** and connect your Git repository.
+2. Set the **Environment** to `Node`.
+3. Set the **Build Command** to:
+
+```bash
+npm run build
+```
+
+4. Set the **Start Command** to:
+
+```bash
+npm start
+```
+
+5. Add this environment variable in Render:
+
+- `FIREBASE_SERVICE_ACCOUNT` — the full service account JSON string from your Firebase service account file
+
+6. Deploy. Render will build and run your service.
+
+> If you do not want to paste JSON into the Render dashboard, use `FIREBASE_SERVICE_ACCOUNT_FILE` locally and keep the file out of source control.
+
+### Local dev with the download file
+
+If you want to run the backend locally with the downloaded service account file, add a `.env` file to the project root containing:
+
+```bash
+FIREBASE_SERVICE_ACCOUNT_FILE=C:\Users\MUSAAB-TECH\Downloads\homeostracker-firebase-adminsdk-fbsvc-a0a048abf8.json
+```
+
+Then start the local server with:
+
+```bash
+npm run build
+npm start
+```
+
+Notes:
+
+- `server.js` reads `FIREBASE_SERVICE_ACCOUNT` for Render and `FIREBASE_SERVICE_ACCOUNT_FILE` for local development.
+- `server.js` also serves the frontend from `dist/`, so Render can host both the backend and the UI together.
+
+---
+
 ## Step 5 — Change the team PIN (optional but recommended)
 
 Open `src/App.jsx` and find this line near the top:

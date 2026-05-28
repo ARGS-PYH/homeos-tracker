@@ -1,11 +1,25 @@
 import admin from 'firebase-admin'
+import dotenv from 'dotenv'
+import fs from 'fs'
+
+dotenv.config()
 
 const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+const serviceAccountFile = process.env.FIREBASE_SERVICE_ACCOUNT_FILE
+let rawServiceAccount = serviceAccountJson || null
 let serviceAccount = null
 
-if (serviceAccountJson) {
+if (!rawServiceAccount && serviceAccountFile) {
   try {
-    serviceAccount = JSON.parse(serviceAccountJson)
+    rawServiceAccount = fs.readFileSync(serviceAccountFile, 'utf8')
+  } catch (error) {
+    console.error('Could not read FIREBASE_SERVICE_ACCOUNT_FILE:', error)
+  }
+}
+
+if (rawServiceAccount) {
+  try {
+    serviceAccount = JSON.parse(rawServiceAccount)
   } catch (error) {
     console.error('Could not parse FIREBASE_SERVICE_ACCOUNT JSON:', error)
   }
