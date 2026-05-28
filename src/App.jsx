@@ -180,6 +180,7 @@ export default function App() {
   const [checked, setChecked]     = useState({})
   const [connected, setConnected] = useState(false)
   const [lastUpdate, setLastUpdate] = useState(null)
+  const [syncing, setSyncing]     = useState(false)
 
   const TASK_STORAGE_KEY = 'homeos_tasks'
 
@@ -235,6 +236,7 @@ export default function App() {
   }, [])
 
   const loadTasks = useCallback(async () => {
+    setSyncing(true)
     const cached = await loadLocalTasks()
     if (Object.keys(cached).length) {
       setChecked(cached)
@@ -245,29 +247,33 @@ export default function App() {
     const timeout = setTimeout(() => controller.abort(), 5000)
 
     try {
-      const response = await fetch('/api/tasks', { signal: controller.signal })
-      clearTimeout(timeout)
-      if (!response.ok) throw new Error('Failed to load tasks')
-      const data = await response.json()
-      setChecked(data || cached)
-      saveLocalTasks(data || cached)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      setConnected(true)
-      return
-    } catch (error) {
-      clearTimeout(timeout)
-      console.warn('Backend unavailable or slow, using cache/fallback', error)
-    }
+      try {
+        const response = await fetch('/api/tasks', { signal: controller.signal })
+        clearTimeout(timeout)
+        if (!response.ok) throw new Error('Failed to load tasks')
+        const data = await response.json()
+        const finalData = data || cached
+        setChecked(finalData)
+        saveLocalTasks(finalData)
+        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+        setConnected(true)
+        return
+      } catch (error) {
+        clearTimeout(timeout)
+        console.warn('Backend unavailable or slow, using cache/fallback', error)
+      }
 
-    try {
       const data = await loadClientTasks()
-      setChecked(data || cached)
-      saveLocalTasks(data || cached)
+      const finalData = data || cached
+      setChecked(finalData)
+      saveLocalTasks(finalData)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      setConnected(!!Object.keys(data).length)
+      setConnected(!!Object.keys(finalData).length)
     } catch (error) {
       console.error('Firestore fallback failed', error)
       setConnected(false)
+    } finally {
+      setSyncing(false)
     }
   }, [loadClientTasks, loadLocalTasks, saveLocalTasks])
 
@@ -275,7 +281,12 @@ export default function App() {
     if (!authed) return
     loadTasks()
     const interval = setInterval(loadTasks, 2000)
-    return () => clearInterval(interval)
+    const onFocus = () => loadTasks()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [authed, loadTasks])
 
   // ── Toggle task ───────────────────────────────────────────────────────────
