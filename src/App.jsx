@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore'
+import { doc, setDoc, getDoc } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { BUSINESS, DEV } from './data.js'
 
@@ -181,36 +181,118 @@ export default function App() {
   const [connected, setConnected] = useState(false)
   const [lastUpdate, setLastUpdate] = useState(null)
 
-  // ── Real-time Firestore listener ──────────────────────────────────────────
+  const TASK_STORAGE_KEY = 'homeos_tasks'
+
+  const loadLocalTasks = useCallback(async () => {
+    const raw = localStorage.getItem(TASK_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  }, [])
+
+  const saveLocalTasks = useCallback(async (data) => {
+    localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(data))
+    return data
+  }, [])
+
+  const loadClientTasks = useCallback(async () => {
+    try {
+      const ref = doc(db, 'homeos', 'tasks')
+      const snap = await getDoc(ref)
+      if (snap.exists()) return snap.data()
+    } catch (error) {
+      console.warn('Firestore client load failed, using local fallback', error)
+    }
+    return loadLocalTasks()
+  }, [])
+
+  const toggleClientTask = useCallback(async (key, name) => {
+    const now = new Date()
+    const time = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) +
+      ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
+
+    try {
+      const ref = doc(db, 'homeos', 'tasks')
+      const snap = await getDoc(ref)
+      const data = snap.exists() ? snap.data() : {}
+      const isChecked = !data[key]
+      const update = {
+        ...data,
+        [key]: isChecked,
+        [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+      }
+      await setDoc(ref, update)
+      return update
+    } catch (error) {
+      console.warn('Firestore client toggle failed, using local fallback', error)
+      const data = await loadLocalTasks()
+      const isChecked = !data[key]
+      const update = {
+        ...data,
+        [key]: isChecked,
+        [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+      }
+      return saveLocalTasks(update)
+    }
+  }, [])
+
+  const loadTasks = useCallback(async () => {
+    try {
+      const response = await fetch('/api/tasks')
+      if (!response.ok) throw new Error('Failed to load tasks')
+      const data = await response.json()
+      setChecked(data || {})
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      setConnected(true)
+      return
+    } catch (error) {
+      console.warn('Backend unavailable, falling back to Firestore client', error)
+    }
+
+    try {
+      const data = await loadClientTasks()
+      setChecked(data || {})
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      setConnected(true)
+    } catch (error) {
+      console.error('Firestore fallback failed', error)
+      setConnected(false)
+    }
+  }, [loadClientTasks])
+
   useEffect(() => {
     if (!authed) return
-    const ref = doc(db, 'homeos', 'tasks')
-    const unsub = onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
-        setChecked(snap.data())
-        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      }
-      setConnected(true)
-    }, () => setConnected(false))
-    return unsub
-  }, [authed])
+    loadTasks()
+    const interval = setInterval(loadTasks, 5000)
+    return () => clearInterval(interval)
+  }, [authed, loadTasks])
 
   // ── Toggle task ───────────────────────────────────────────────────────────
   const toggle = useCallback(async (key, name) => {
-    const ref  = doc(db, 'homeos', 'tasks')
-    const snap = await getDoc(ref)
-    const data = snap.exists() ? snap.data() : {}
-    const now  = new Date()
-    const time = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) +
-                 ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
-    const isChecked = !data[key]
-    const update = {
-      ...data,
-      [key]: isChecked,
-      [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+    try {
+      const response = await fetch('/api/tasks/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, userName: name })
+      })
+      if (!response.ok) throw new Error('Failed to toggle task')
+      const data = await response.json()
+      setChecked(data || {})
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      setConnected(true)
+      return
+    } catch (error) {
+      console.warn('Backend toggle failed, falling back to Firestore client', error)
     }
-    await setDoc(ref, update)
-  }, [])
+
+    try {
+      const data = await toggleClientTask(key, name)
+      setChecked(data || {})
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      setConnected(true)
+    } catch (error) {
+      console.error('Firestore toggle fallback failed', error)
+      setConnected(false)
+    }
+  }, [toggleClientTask])
 
   // ── Name setup ────────────────────────────────────────────────────────────
   const saveName = (n) => {

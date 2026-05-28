@@ -59,6 +59,44 @@ VITE_FIREBASE_APP_ID=1:123456789:web:abc123
 
 ---
 
+## New backend and free hosting
+
+This repository now includes a serverless backend API in `api/`.
+Use Vercel free hosting to deploy both the frontend and API together.
+
+### Deploy to Vercel
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Create a Firebase service account key:
+
+- Open Firebase Console → Project Settings → Service accounts
+- Click **Generate new private key**
+- Save the JSON file securely
+
+3. In Vercel, add an environment variable:
+
+- `FIREBASE_SERVICE_ACCOUNT` = the contents of the service account JSON file
+
+4. Deploy:
+
+```bash
+npx vercel login
+npx vercel
+```
+
+5. Local development with the backend:
+
+```bash
+npx vercel dev
+```
+
+---
+
 ## Step 5 — Change the team PIN (optional but recommended)
 
 Open `src/App.jsx` and find this line near the top:
