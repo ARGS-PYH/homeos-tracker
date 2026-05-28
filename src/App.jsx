@@ -202,7 +202,7 @@ export default function App() {
       console.warn('Firestore client load failed, using local fallback', error)
     }
     return loadLocalTasks()
-  }, [])
+  }, [loadLocalTasks])
 
   const toggleClientTask = useCallback(async (key, name) => {
     const now = new Date()
@@ -235,38 +235,66 @@ export default function App() {
   }, [])
 
   const loadTasks = useCallback(async () => {
+    const cached = await loadLocalTasks()
+    if (Object.keys(cached).length) {
+      setChecked(cached)
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+    }
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+
     try {
-      const response = await fetch('/api/tasks')
+      const response = await fetch('/api/tasks', { signal: controller.signal })
+      clearTimeout(timeout)
       if (!response.ok) throw new Error('Failed to load tasks')
       const data = await response.json()
-      setChecked(data || {})
+      setChecked(data || cached)
+      saveLocalTasks(data || cached)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
       return
     } catch (error) {
-      console.warn('Backend unavailable, falling back to Firestore client', error)
+      clearTimeout(timeout)
+      console.warn('Backend unavailable or slow, using cache/fallback', error)
     }
 
     try {
       const data = await loadClientTasks()
-      setChecked(data || {})
+      setChecked(data || cached)
+      saveLocalTasks(data || cached)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      setConnected(true)
+      setConnected(!!Object.keys(data).length)
     } catch (error) {
       console.error('Firestore fallback failed', error)
       setConnected(false)
     }
-  }, [loadClientTasks])
+  }, [loadClientTasks, loadLocalTasks, saveLocalTasks])
 
   useEffect(() => {
     if (!authed) return
     loadTasks()
-    const interval = setInterval(loadTasks, 5000)
+    const interval = setInterval(loadTasks, 2000)
     return () => clearInterval(interval)
   }, [authed, loadTasks])
 
   // ── Toggle task ───────────────────────────────────────────────────────────
   const toggle = useCallback(async (key, name) => {
+    const now = new Date()
+    const time = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) +
+      ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
+    const isChecked = !checked[key]
+    const optimisticUpdate = {
+      ...checked,
+      [key]: isChecked,
+      [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+    }
+
+    setChecked(optimisticUpdate)
+    setLastUpdate(time)
+    setConnected(true)
+    saveLocalTasks(optimisticUpdate)
+
     try {
       const response = await fetch('/api/tasks/toggle', {
         method: 'POST',
@@ -275,7 +303,8 @@ export default function App() {
       })
       if (!response.ok) throw new Error('Failed to toggle task')
       const data = await response.json()
-      setChecked(data || {})
+      setChecked(data || optimisticUpdate)
+      saveLocalTasks(data || optimisticUpdate)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
       return
@@ -285,14 +314,20 @@ export default function App() {
 
     try {
       const data = await toggleClientTask(key, name)
-      setChecked(data || {})
+      setChecked(data || optimisticUpdate)
+      saveLocalTasks(data || optimisticUpdate)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
     } catch (error) {
       console.error('Firestore toggle fallback failed', error)
       setConnected(false)
+      setChecked((current) => ({
+        ...current,
+        [key]: !isChecked,
+        [`${key}__meta`]: current[`${key}__meta`]
+      }))
     }
-  }, [toggleClientTask])
+  }, [checked, saveLocalTasks, toggleClientTask])
 
   // ── Name setup ────────────────────────────────────────────────────────────
   const saveName = (n) => {
