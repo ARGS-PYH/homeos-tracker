@@ -1,4 +1,4 @@
-import { db } from '../firebaseAdmin.js'
+import { db, taskCache } from '../firebaseAdmin.js'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -31,6 +31,14 @@ export default async function handler(req, res) {
     }
 
     await ref.set(update, { merge: true })
+
+    if (taskCache.data) {
+      taskCache.data = {
+        ...taskCache.data,
+        ...update,
+      }
+    }
+
     return res.status(200).json(update)
   } catch (error) {
     console.error('Failed to toggle task:', error)

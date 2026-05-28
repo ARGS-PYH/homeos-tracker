@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { doc, setDoc, getDoc } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { BUSINESS, DEV } from './data.js'
 
@@ -279,26 +279,41 @@ export default function App() {
 
   useEffect(() => {
     if (!authed) return
-    let active = true
-    let timer = null
 
-    const poll = async () => {
-      if (!active) return
-      await loadTasks()
-      if (!active) return
-      timer = setTimeout(poll, 4000)
-    }
+    const ref = doc(db, 'homeos', 'tasks')
+    const unsubscribe = onSnapshot(ref, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data()
+        setChecked(data)
+        saveLocalTasks(data)
+        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+        setConnected(true)
+      } else {
+        setChecked({})
+        setConnected(true)
+      }
+    }, (error) => {
+      console.warn('Realtime listener failed:', error)
+      setConnected(false)
+    })
 
-    poll()
     const onFocus = () => loadTasks()
     window.addEventListener('focus', onFocus)
 
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        loadTasks()
+      }
+    }, 10000)
+
+    loadTasks()
+
     return () => {
-      active = false
-      if (timer) clearTimeout(timer)
+      unsubscribe()
+      clearInterval(interval)
       window.removeEventListener('focus', onFocus)
     }
-  }, [authed, loadTasks])
+  }, [authed, loadTasks, saveLocalTasks])
 
   // ── Toggle task ───────────────────────────────────────────────────────────
   const toggle = useCallback(async (key, name) => {

@@ -34,3 +34,4 @@ if (!admin.apps.length) {
 }
 
 export const db = admin.firestore()
+export const taskCache = { data: null }
