@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only allow access to the homeos/tasks document
+    // No auth required — PIN gate is handled client-side
+    match /homeos/{document} {
+      allow read, write: if true;
+    }
+  }
+}

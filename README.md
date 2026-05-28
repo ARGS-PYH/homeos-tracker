@@ -1,0 +1,170 @@
+# HomeOS.ng Launch Tracker — Deployment Guide
+
+## What this is
+A real-time shared todo list for the HomeOS.ng founding team.
+Built with React + Vite + Firebase Firestore + Firebase Hosting.
+
+When anyone checks a task, everyone sees it update instantly.
+Each check shows who did it and when.
+
+---
+
+## Step 1 — Create your Firebase project
+
+1. Go to https://console.firebase.google.com
+2. Click "Add project"
+3. Name it: `homeos-tracker` (or anything you like)
+4. Disable Google Analytics (not needed)
+5. Click "Create project"
+
+---
+
+## Step 2 — Enable Firestore
+
+1. In your Firebase project, go to **Build → Firestore Database**
+2. Click "Create database"
+3. Choose **Start in test mode** (we set proper rules in Step 6)
+4. Pick a region — choose `europe-west1` or `us-central1`
+5. Click "Enable"
+
+---
+
+## Step 3 — Get your Firebase config
+
+1. Go to **Project Settings** (gear icon top left)
+2. Scroll down to "Your apps" → click the `</>` (Web) icon
+3. Register the app — name it `homeos-tracker-web`
+4. Copy the `firebaseConfig` object shown
+
+---
+
+## Step 4 — Set up your .env file
+
+In the project folder, copy the example env file:
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in your values from the Firebase config:
+
+```
+VITE_FIREBASE_API_KEY=AIzaSy...
+VITE_FIREBASE_AUTH_DOMAIN=homeos-tracker.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=homeos-tracker
+VITE_FIREBASE_STORAGE_BUCKET=homeos-tracker.appspot.com
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
+VITE_FIREBASE_APP_ID=1:123456789:web:abc123
+```
+
+---
+
+## Step 5 — Change the team PIN (optional but recommended)
+
+Open `src/App.jsx` and find this line near the top:
+
+```js
+const TEAM_PIN = '2604'
+```
+
+Change `'2604'` to whatever PIN you want the team to use.
+
+---
+
+## Step 6 — Install and deploy
+
+Make sure you have Node.js installed (v18+), then run:
+
+```bash
+# Install dependencies
+npm install
+
+# Install Firebase CLI globally (if not already installed)
+npm install -g firebase-tools
+
+# Log in to Firebase
+firebase login
+
+# Connect this project to your Firebase project
+firebase use --add
+# → Select your project from the list
+# → Give it an alias: default
+
+# Deploy Firestore rules
+firebase deploy --only firestore:rules
+
+# Build the app
+npm run build
+
+# Deploy to Firebase Hosting
+firebase deploy --only hosting
+```
+
+Firebase will give you a URL like:
+`https://homeos-tracker-xxxxx.web.app`
+
+Share that URL with your team along with the PIN.
+
+---
+
+## Step 7 — Share with the team
+
+Send the team:
+- The URL (e.g. `https://homeos-tracker-xxxxx.web.app`)
+- The team PIN
+- Tell each person to enter their first name when they first log in
+  (this is how the app shows who checked what)
+
+---
+
+## Local development
+
+To run locally while building:
+
+```bash
+npm run dev
+```
+
+Then open http://localhost:5173
+
+---
+
+## Changing the PIN later
+
+Edit `src/App.jsx`, change `TEAM_PIN`, then redeploy:
+
+```bash
+npm run build && firebase deploy --only hosting
+```
+
+---
+
+## Resetting all task progress
+
+Go to Firebase Console → Firestore Database → find the `homeos` collection
+→ delete the `tasks` document. All checkboxes will reset.
+
+---
+
+## Project structure
+
+```
+homeos-tracker/
+├── src/
+│   ├── App.jsx          ← Main app (PIN gate, task tracker, Firebase sync)
+│   ├── data.js          ← All task data (edit here to add/remove tasks)
+│   ├── firebase.js      ← Firebase config
+│   ├── main.jsx         ← Entry point
+│   └── index.css        ← Global styles
+├── index.html
+├── package.json
+├── vite.config.js
+├── firebase.json        ← Firebase Hosting config
+├── firestore.rules      ← Firestore security rules
+├── .env.example         ← Copy to .env and fill in your Firebase values
+└── README.md            ← This file
+```
+
+---
+
+Built for Peregrine Solutions · HomeOS.ng · 2026
