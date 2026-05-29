@@ -152,7 +152,7 @@ Notes:
 Open `src/App.jsx` and find this line near the top:
 
 ```js
-const TEAM_PIN = '2604'
+
 ```
 
 Change `'2604'` to whatever PIN you want the team to use.
