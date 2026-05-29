@@ -9,6 +9,7 @@ const G        = '#1A6B3C'
 const G_LITE   = '#E8F5EE'
 const AMBER_BG = '#FFFBEB'
 const AMBER    = '#D97706'
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const taskKey  = (tab, gi, ii) => `${tab}__${gi}__${ii}`
@@ -195,13 +196,12 @@ export default function App() {
   }, [])
 
   const loadClientTasks = useCallback(async () => {
-    try {
-      const ref = doc(db, 'homeos', 'tasks')
-      const snap = await getDoc(ref)
-      if (snap.exists()) return snap.data()
-    } catch (error) {
-      console.warn('Firestore client load failed, using local fallback', error)
-    }
+    const ref = doc(db, 'homeos', 'tasks')
+    const snap = await getDoc(ref)
+    return snap.exists() ? snap.data() : null
+  }, [])
+
+  const loadCachedTasks = useCallback(async () => {
     return loadLocalTasks()
   }, [loadLocalTasks])
 
@@ -216,12 +216,12 @@ export default function App() {
       const data = snap.exists() ? snap.data() : {}
       const isChecked = !data[key]
       const update = {
-        ...data,
         [key]: isChecked,
         [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
       }
-      await setDoc(ref, update)
-      return update
+      const merged = { ...data, ...update }
+      await setDoc(ref, merged)
+      return merged
     } catch (error) {
       console.warn('Firestore client toggle failed, using local fallback', error)
       const data = await loadLocalTasks()
@@ -238,37 +238,40 @@ export default function App() {
   const loadTasks = useCallback(async () => {
     setSyncing(true)
     const cached = await loadLocalTasks()
-    if (Object.keys(cached).length) {
-      setChecked(cached)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-    }
+    setConnected(false)
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 5000)
 
     try {
       try {
-        const response = await fetch('/api/tasks', { signal: controller.signal })
+        const response = await fetch(`${API_BASE}/api/tasks`, { signal: controller.signal })
         clearTimeout(timeout)
         if (!response.ok) throw new Error('Failed to load tasks')
         const data = await response.json()
-        const finalData = data || cached
+        const finalData = data || {}
         setChecked(finalData)
-        saveLocalTasks(finalData)
+        await saveLocalTasks(finalData)
         setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
         setConnected(true)
         return
       } catch (error) {
         clearTimeout(timeout)
-        console.warn('Backend unavailable or slow, using cache/fallback', error)
+        console.warn('Backend unavailable or slow, using DB fallback', error)
       }
 
       const data = await loadClientTasks()
-      const finalData = data || cached
-      setChecked(finalData)
-      saveLocalTasks(finalData)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      setConnected(!!Object.keys(finalData).length)
+      if (data) {
+        setChecked(data)
+        await saveLocalTasks(data)
+        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+        setConnected(true)
+      } else {
+        const cached = await loadCachedTasks()
+        setChecked(cached)
+        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+        setConnected(false)
+      }
     } catch (error) {
       console.error('Firestore fallback failed', error)
       setConnected(false)
@@ -281,17 +284,12 @@ export default function App() {
     if (!authed) return
 
     const ref = doc(db, 'homeos', 'tasks')
-    const unsubscribe = onSnapshot(ref, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data()
-        setChecked(data)
-        saveLocalTasks(data)
-        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-        setConnected(true)
-      } else {
-        setChecked({})
-        setConnected(true)
-      }
+    const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, (snap) => {
+      const data = snap.exists() ? snap.data() : {}
+      setChecked(data)
+      saveLocalTasks(data)
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      setConnected(true)
     }, (error) => {
       console.warn('Realtime listener failed:', error)
       setConnected(false)
@@ -330,18 +328,18 @@ export default function App() {
     setChecked(optimisticUpdate)
     setLastUpdate(time)
     setConnected(true)
-    saveLocalTasks(optimisticUpdate)
 
     try {
-      const response = await fetch('/api/tasks/toggle', {
+      const response = await fetch(`${API_BASE}/api/tasks/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, userName: name, isChecked })
       })
       if (!response.ok) throw new Error('Failed to toggle task')
       const data = await response.json()
-      setChecked(data || optimisticUpdate)
-      saveLocalTasks(data || optimisticUpdate)
+      const merged = { ...checked, ...data }
+      setChecked(merged)
+      await saveLocalTasks(merged)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
       return
@@ -351,8 +349,9 @@ export default function App() {
 
     try {
       const data = await toggleClientTask(key, name)
-      setChecked(data || optimisticUpdate)
-      saveLocalTasks(data || optimisticUpdate)
+      const merged = { ...checked, ...data }
+      setChecked(merged)
+      await saveLocalTasks(merged)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
     } catch (error) {

@@ -55,7 +55,10 @@ VITE_FIREBASE_PROJECT_ID=homeos-tracker
 VITE_FIREBASE_STORAGE_BUCKET=homeos-tracker.appspot.com
 VITE_FIREBASE_MESSAGING_SENDER_ID=123456789
 VITE_FIREBASE_APP_ID=1:123456789:web:abc123
+VITE_API_URL=https://your-backend-domain.com
 ```
+
+The important new value is `VITE_API_URL`. It tells the frontend where to send requests like `/api/tasks` and `/api/tasks/toggle`.
 
 ---
 
@@ -117,9 +120,10 @@ npm run build
 npm start
 ```
 
-5. Add this environment variable in Render:
+5. Add these environment variables in Render:
 
 - `FIREBASE_SERVICE_ACCOUNT` — the full service account JSON string from your Firebase service account file
+- `VITE_API_URL` — the backend URL where your API is hosted, for example `https://your-app.onrender.com`
 
 6. Deploy. Render will build and run your service.
 
