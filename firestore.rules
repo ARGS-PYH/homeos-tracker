@@ -6,5 +6,9 @@ service cloud.firestore {
     match /homeos/{document} {
       allow read, write: if true;
     }
+    // Allow presence collection (root-level) used by clients
+    match /homeos_presence/{document} {
+      allow read, write: if true;
+    }
   }
 }

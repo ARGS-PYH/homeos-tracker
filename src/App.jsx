@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, getDoc, collection, query, orderBy, serverTimestamp } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { BUSINESS, DEV } from './data.js'
 
@@ -20,6 +20,31 @@ const phaseKeys = (data, tab, phase) =>
     const gi = data.indexOf(g)
     return g.items.map((_, ii) => taskKey(tab, gi, ii))
   })
+
+const getTaskLabel = (key) => {
+  const [tab, gi, ii] = key.split('__')
+  const group = tab === 'business' ? BUSINESS[Number(gi)] : DEV[Number(gi)]
+  return group?.items?.[Number(ii)] || key
+}
+
+const getLatestAction = (checkedData) => {
+  const actions = Object.entries(checkedData)
+    .filter(([key, value]) => key.endsWith('__meta') && value && value.by && value.at)
+    .map(([key, meta]) => {
+      const taskKey = key.replace(/__meta$/, '')
+      const timestamp = new Date(meta.at).getTime() || 0
+      return {
+        taskKey,
+        taskLabel: getTaskLabel(taskKey),
+        by: meta.by,
+        at: meta.at,
+        timestamp,
+      }
+    })
+
+  actions.sort((a, b) => b.timestamp - a.timestamp)
+  return actions[0] || null
+}
 
 // ── PIN Gate ──────────────────────────────────────────────────────────────────
 function PinGate({ onUnlock }) {
@@ -180,8 +205,11 @@ export default function App() {
   const [phaseFilter, setPhase]   = useState(0)
   const [checked, setChecked]     = useState({})
   const [connected, setConnected] = useState(false)
+  const [showReconnect, setShowReconnect] = useState(false)
   const [lastUpdate, setLastUpdate] = useState(null)
+  const [lastAction, setLastAction] = useState(null)
   const [syncing, setSyncing]     = useState(false)
+  const [activeUsers, setActiveUsers] = useState([])
 
   const TASK_STORAGE_KEY = 'homeos_tasks'
 
@@ -245,9 +273,12 @@ export default function App() {
 
     try {
       try {
+        if (!API_BASE) throw new Error('No backend API configured')
         const response = await fetch(`${API_BASE}/api/tasks`, { signal: controller.signal })
         clearTimeout(timeout)
         if (!response.ok) throw new Error('Failed to load tasks')
+        const contentType = response.headers.get('content-type') || ''
+        if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
         const data = await response.json()
         const finalData = data || {}
         setChecked(finalData)
@@ -281,7 +312,11 @@ export default function App() {
   }, [loadClientTasks, loadLocalTasks, saveLocalTasks])
 
   useEffect(() => {
-    if (!authed) return
+    setLastAction(getLatestAction(checked))
+  }, [checked])
+
+  useEffect(() => {
+    if (!authed || !nameSet) return
 
     const ref = doc(db, 'homeos', 'tasks')
     const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, (snap) => {
@@ -296,7 +331,15 @@ export default function App() {
     })
 
     const onFocus = () => loadTasks()
+    const onOnline = () => {
+      setConnected(true)
+      loadTasks()
+    }
+    const onOffline = () => setConnected(false)
+
     window.addEventListener('focus', onFocus)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
 
     const interval = setInterval(() => {
       if (!document.hidden) {
@@ -310,8 +353,93 @@ export default function App() {
       unsubscribe()
       clearInterval(interval)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
     }
-  }, [authed, loadTasks, saveLocalTasks])
+  }, [authed, nameSet, loadTasks, saveLocalTasks])
+
+  useEffect(() => {
+    if (!authed || !nameSet) return
+    setShowReconnect(false)
+    if (connected) return
+
+    const timer = setTimeout(() => {
+      setShowReconnect(true)
+    }, 1000)
+
+    return () => clearTimeout(timer)
+  }, [authed, nameSet, connected])
+
+  useEffect(() => {
+    if (!authed || !nameSet || !userName) return
+
+    const presenceId = userName.trim().replace(/\s+/g, '_').toLowerCase()
+
+    // If API backend is available, report presence to backend and poll for active users
+    if (API_BASE) {
+      const report = async () => {
+        try {
+          await fetch(`${API_BASE}/api/presence/report`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: presenceId, name: userName, tab })
+          })
+        } catch (error) {
+          console.warn('Presence report failed:', error)
+        }
+      }
+
+      const fetchUsers = async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/presence`)
+          if (!r.ok) throw new Error('Failed to fetch presence')
+          const users = await r.json()
+          setActiveUsers(users.filter(u => u.name))
+        } catch (error) {
+          console.warn('Fetch presence failed:', error)
+        }
+      }
+
+      report()
+      fetchUsers()
+      const interval = setInterval(() => { report(); fetchUsers() }, 5000)
+      return () => clearInterval(interval)
+    }
+
+    // Fallback: direct Firestore client-side presence (requires client Firebase config)
+    const presenceCollection = collection(db, 'homeos_presence')
+    const presenceRef = doc(presenceCollection, presenceId)
+
+    const updatePresence = async () => {
+      try {
+        await setDoc(presenceRef, {
+          name: userName,
+          tab,
+          lastSeen: serverTimestamp(),
+        }, { merge: true })
+      } catch (error) {
+        console.warn('Presence update failed:', error)
+      }
+    }
+
+    updatePresence()
+    const presenceInterval = setInterval(updatePresence, 5000)
+
+    const presenceQuery = query(collection(db, 'homeos_presence'), orderBy('lastSeen', 'desc'))
+    const unsubscribePresence = onSnapshot(presenceQuery, (snap) => {
+      const users = snap.docs
+        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+        .filter((user) => user.name)
+      setActiveUsers(users)
+    }, (error) => {
+      console.warn('Presence listener failed:', error)
+    })
+
+    return () => {
+      clearInterval(presenceInterval)
+      unsubscribePresence()
+    }
+  }, [authed, nameSet, userName, tab])
 
   // ── Toggle task ───────────────────────────────────────────────────────────
   const toggle = useCallback(async (key, name) => {
@@ -330,12 +458,15 @@ export default function App() {
     setConnected(true)
 
     try {
+      if (!API_BASE) throw new Error('No backend API configured')
       const response = await fetch(`${API_BASE}/api/tasks/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, userName: name, isChecked })
       })
       if (!response.ok) throw new Error('Failed to toggle task')
+      const contentType = response.headers.get('content-type') || ''
+      if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
       const data = await response.json()
       const merged = { ...checked, ...data }
       setChecked(merged)
@@ -431,10 +562,21 @@ export default function App() {
           <span style={{ fontWeight: 600, fontSize: 15, color: '#1A1A1A' }}>HomeOS.ng</span>
           <span style={{ fontSize: 13, color: '#9CA3AF' }}>Launch Tracker</span>
           <div style={{ flex: 1 }} />
-          {/* Connection status */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: connected ? '#059669' : '#EF4444' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? '#059669' : '#EF4444' }} />
-            {connected ? (lastUpdate ? `Updated ${lastUpdate}` : 'Live') : 'Reconnecting...'}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: connected || showReconnect ? '#059669' : '#EF4444' }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: connected || showReconnect ? '#059669' : '#EF4444' }} />
+              {connected ? (lastUpdate ? `Updated ${lastUpdate}` : 'Live') : (showReconnect ? 'Online' : 'Connecting...')}
+            </div>
+            {activeUsers.length > 0 && (
+              <div style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
+                Active: {activeUsers.map((u) => u.name).join(', ')}
+              </div>
+            )}
+            {lastAction && (
+              <div style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
+                Last action: {lastAction.by} checked "{lastAction.taskLabel}" at {lastAction.at}
+              </div>
+            )}
           </div>
           {/* Name chip */}
           <div

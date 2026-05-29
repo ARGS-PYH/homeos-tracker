@@ -10,5 +10,13 @@ const firebaseConfig = {
   appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 }
 
+// Debug: warn when required Firebase config is missing in dev environments
+if (!firebaseConfig.projectId) {
+  console.warn('Missing Firebase projectId (VITE_FIREBASE_PROJECT_ID). Realtime features (presence/listeners) will fail and show projects/undefined in network calls.')
+}
+if (!firebaseConfig.apiKey) {
+  console.warn('Missing Firebase apiKey (VITE_FIREBASE_API_KEY). Firebase client may not initialize correctly.')
+}
+
 const app = initializeApp(firebaseConfig)
 export const db = getFirestore(app)
