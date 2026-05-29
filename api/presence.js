@@ -23,13 +23,22 @@ export default async function presenceHandler(req, res) {
 
     if (method === 'GET') {
       try {
-        const q = db.collection('homeos_presence').orderBy('lastSeen', 'desc').limit(50)
+        // Only return users who were active in the last 30 seconds
+        const cutoff = new Date(Date.now() - 30000)
+        const cutoffTimestamp = admin.firestore.Timestamp.fromDate(cutoff)
+        const q = db.collection('homeos_presence')
+          .where('lastSeen', '>=', cutoffTimestamp)
+          .orderBy('lastSeen', 'desc')
+          .limit(50)
         const snap = await q.get()
         const users = snap.docs.map(d => ({ id: d.id, ...d.data() }))
         return res.status(200).json(users)
       } catch (err) {
-        // fallback to in-memory list
-        const users = Array.from(store.values()).sort((a, b) => (b.lastSeen || '') > (a.lastSeen || '') ? 1 : -1)
+        // fallback to in-memory with staleness filter
+        const now = Date.now()
+        const users = Array.from(store.values())
+          .filter(u => (now - new Date(u.lastSeen).getTime()) < 30000)
+          .sort((a, b) => (b.lastSeen || '') > (a.lastSeen || '') ? 1 : -1)
         return res.status(200).json(users)
       }
     }

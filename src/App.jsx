@@ -341,17 +341,13 @@ export default function App() {
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
 
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadTasks()
-      }
-    }, 10000)
+    // No polling interval — onSnapshot handles all real-time updates.
+    // Polling every 10s was overwriting onSnapshot state with stale API cache data.
 
     loadTasks()
 
     return () => {
       unsubscribe()
-      clearInterval(interval)
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
@@ -394,7 +390,18 @@ export default function App() {
           const r = await fetch(`${API_BASE}/api/presence`)
           if (!r.ok) throw new Error('Failed to fetch presence')
           const users = await r.json()
-          setActiveUsers(users.filter(u => u.name))
+          const now = Date.now()
+          // Only show users active in the last 30 seconds
+          setActiveUsers(users.filter(u => {
+            if (!u.name) return false
+            if (u.lastSeen) {
+              const ms = u.lastSeen._seconds
+                ? u.lastSeen._seconds * 1000
+                : new Date(u.lastSeen).getTime()
+              return (now - ms) < 30000
+            }
+            return true
+          }))
         } catch (error) {
           console.warn('Fetch presence failed:', error)
         }
@@ -427,9 +434,17 @@ export default function App() {
 
     const presenceQuery = query(collection(db, 'homeos_presence'), orderBy('lastSeen', 'desc'))
     const unsubscribePresence = onSnapshot(presenceQuery, (snap) => {
+      const now = Date.now()
       const users = snap.docs
         .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-        .filter((user) => user.name)
+        .filter((user) => {
+          if (!user.name) return false
+          // Only show users active in the last 30 seconds
+          if (user.lastSeen?.toMillis) {
+            return (now - user.lastSeen.toMillis()) < 30000
+          }
+          return true
+        })
       setActiveUsers(users)
     }, (error) => {
       console.warn('Presence listener failed:', error)
@@ -447,16 +462,22 @@ export default function App() {
     const time = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) +
       ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
     const isChecked = !checked[key]
+
+    // Optimistic update — instant UI feedback while the write is in flight
     const optimisticUpdate = {
       ...checked,
       [key]: isChecked,
       [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
     }
-
     setChecked(optimisticUpdate)
     setLastUpdate(time)
-    setConnected(true)
+    await saveLocalTasks(optimisticUpdate)
 
+    // Write to backend — do NOT call setChecked on success.
+    // onSnapshot is the single source of truth and updates state
+    // automatically once Firestore confirms the write.
+    // The old code merged stale `checked` with the API delta, which wiped
+    // out concurrent changes from other users (stale-closure bug).
     try {
       if (!API_BASE) throw new Error('No backend API configured')
       const response = await fetch(`${API_BASE}/api/tasks/toggle`, {
@@ -467,31 +488,24 @@ export default function App() {
       if (!response.ok) throw new Error('Failed to toggle task')
       const contentType = response.headers.get('content-type') || ''
       if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
-      const data = await response.json()
-      const merged = { ...checked, ...data }
-      setChecked(merged)
-      await saveLocalTasks(merged)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
-      return
+      return // onSnapshot will sync the confirmed state
     } catch (error) {
       console.warn('Backend toggle failed, falling back to Firestore client', error)
     }
 
     try {
-      const data = await toggleClientTask(key, name)
-      const merged = { ...checked, ...data }
-      setChecked(merged)
-      await saveLocalTasks(merged)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      await toggleClientTask(key, name)
       setConnected(true)
+      // onSnapshot will sync the confirmed state
     } catch (error) {
-      console.error('Firestore toggle fallback failed', error)
+      console.error('All toggle methods failed — reverting', error)
       setConnected(false)
+      // Revert the optimistic update since nothing was saved
       setChecked((current) => ({
         ...current,
         [key]: !isChecked,
-        [`${key}__meta`]: current[`${key}__meta`]
+        [`${key}__meta`]: current[`${key}__meta`] ?? null,
       }))
     }
   }, [checked, saveLocalTasks, toggleClientTask])
