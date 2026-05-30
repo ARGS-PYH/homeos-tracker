@@ -18,6 +18,10 @@ app.post('/api/tasks/toggle', (req, res) => toggleHandler(req, res))
 app.post('/api/presence/report', (req, res) => presenceHandler(req, res))
 app.get('/api/presence', (req, res) => presenceHandler(req, res))
 
+// Keep-alive endpoint — ping this every 10 minutes via cron-job.org
+// to prevent Render free tier from spinning down (causes 30-60s cold starts)
+app.get('/ping', (req, res) => res.json({ ok: true, ts: Date.now() }))
+
 // Serve front-end
 app.use(express.static(path.join(__dirname, 'dist')))
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')))

@@ -211,7 +211,17 @@ export default function App() {
   const [tab, setTab]             = useState('business')
   const [phaseFilter, setPhase]   = useState(0)
   const [checked, setChecked]     = useState({})
-  const [connected, setConnected] = useState(false)
+  const [connected, setConnected] = useState(() => {
+    // If we have cached tasks in localStorage, show Online immediately
+    // rather than flashing "Connecting..." on every page load.
+    // onSnapshot will correct this to the real value within milliseconds.
+    try {
+      const raw = localStorage.getItem('homeos_tasks')
+      if (!raw) return false
+      const data = JSON.parse(raw)
+      return !!(data && Object.keys(data).length > 0)
+    } catch { return false }
+  })
   const [showReconnect, setShowReconnect] = useState(false)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [lastAction, setLastAction] = useState(null)
@@ -333,6 +343,13 @@ export default function App() {
     if (!authed || !nameSet) return
 
     const ref = doc(db, 'homeos', 'tasks')
+
+    // Mark as connected the moment the Firestore subscription is established.
+    // Previously this only happened inside the onSnapshot callback (after first
+    // data event), causing "Connecting..." to show even when data was already
+    // loaded from localStorage.
+    setConnected(true)
+
     const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, async (snap) => {
       if (!snap.exists()) {
         // Document not yet created — load from localStorage so we don't wipe state
