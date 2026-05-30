@@ -250,86 +250,64 @@ export default function App() {
     return loadLocalTasks()
   }, [loadLocalTasks])
 
-  const toggleClientTask = useCallback(async (key, name) => {
-    const now = new Date()
-    const time = now.toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) +
-      ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
-
-    try {
-      const ref = doc(db, 'homeos', 'tasks')
-      const snap = await getDoc(ref)
-      const data = snap.exists() ? snap.data() : {}
-      const isChecked = !data[key]
-      const update = {
-        [key]: isChecked,
-        [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
-      }
-      const merged = { ...data, ...update }
-      await setDoc(ref, merged)
-      return merged
-    } catch (error) {
-      console.warn('Firestore client toggle failed, using local fallback', error)
-      const data = await loadLocalTasks()
-      const isChecked = !data[key]
-      const update = {
-        ...data,
-        [key]: isChecked,
-        [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
-      }
-      return saveLocalTasks(update)
+  const toggleClientTask = useCallback(async (key, name, isChecked, time) => {
+    // Single Firestore write with merge — no read needed since we already
+    // know isChecked from the checked state. Previously this did getDoc +
+    // setDoc (full document overwrite), which was 2x slower.
+    const ref = doc(db, 'homeos', 'tasks')
+    const update = {
+      [key]: isChecked,
+      [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
     }
+    await setDoc(ref, update, { merge: true })
   }, [])
 
   const loadTasks = useCallback(async () => {
     setSyncing(true)
     const cached = await loadLocalTasks()
-    setConnected(false)
 
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 5000)
+    // Show cached data instantly while the live fetch happens
+    if (Object.keys(cached).length > 0) setChecked(cached)
 
+    // ── Primary: Firestore SDK directly (Lagos → Firebase, no Render hop) ──
     try {
-      try {
-        if (!API_BASE) throw new Error('No backend API configured')
-        const response = await fetch(`${API_BASE}/api/tasks`, { signal: controller.signal })
-        clearTimeout(timeout)
-        if (!response.ok) throw new Error('Failed to load tasks')
-        const contentType = response.headers.get('content-type') || ''
-        if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
-        const data = await response.json()
-        // Guard: only overwrite state if API returned actual task data.
-        // An empty {} response (e.g. Firestore doc not yet created) must NOT
-        // wipe out localStorage or the current checked state.
-        if (data && Object.keys(data).length > 0) {
-          setChecked(data)
-          await saveLocalTasks(data)
-          setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-          setConnected(true)
-        } else if (Object.keys(cached).length > 0) {
-          setChecked(cached)
-          setConnected(true)
-        }
-        return
-      } catch (error) {
-        clearTimeout(timeout)
-        console.warn('Backend unavailable or slow, using DB fallback', error)
-      }
-
       const data = await loadClientTasks()
-      if (data) {
+      if (data && Object.keys(data).length > 0) {
         setChecked(data)
         await saveLocalTasks(data)
         setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
         setConnected(true)
-      } else {
-        const cached = await loadCachedTasks()
-        setChecked(cached)
-        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-        setConnected(false)
+        setSyncing(false)
+        return
       }
     } catch (error) {
-      console.error('Firestore fallback failed', error)
-      setConnected(false)
+      console.warn('Firestore SDK load failed, trying REST API', error)
+    }
+
+    // ── Fallback: REST API on Render (slower — extra round-trip through Oregon) ──
+    try {
+      if (!API_BASE) throw new Error('No backend API configured')
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5000)
+      const response = await fetch(`${API_BASE}/api/tasks`, { signal: controller.signal })
+      clearTimeout(timeout)
+      if (!response.ok) throw new Error('Failed to load tasks')
+      const contentType = response.headers.get('content-type') || ''
+      if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
+      const data = await response.json()
+      if (data && Object.keys(data).length > 0) {
+        setChecked(data)
+        await saveLocalTasks(data)
+        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+        setConnected(true)
+      } else if (Object.keys(cached).length > 0) {
+        setChecked(cached)
+        setConnected(true)
+      }
+    } catch (error) {
+      console.warn('REST API also unavailable, using cache', error)
+      if (Object.keys(cached).length > 0) setChecked(cached)
+      setConnected(Object.keys(cached).length > 0)
     } finally {
       setSyncing(false)
     }
@@ -409,49 +387,10 @@ export default function App() {
 
     const presenceId = userName.trim().replace(/\s+/g, '_').toLowerCase()
 
-    // If API backend is available, report presence to backend and poll for active users
-    if (API_BASE) {
-      const report = async () => {
-        try {
-          await fetch(`${API_BASE}/api/presence/report`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: presenceId, name: userName, tab })
-          })
-        } catch (error) {
-          console.warn('Presence report failed:', error)
-        }
-      }
-
-      const fetchUsers = async () => {
-        try {
-          const r = await fetch(`${API_BASE}/api/presence`)
-          if (!r.ok) throw new Error('Failed to fetch presence')
-          const users = await r.json()
-          const now = Date.now()
-          // Only show users active in the last 30 seconds
-          setActiveUsers(users.filter(u => {
-            if (!u.name) return false
-            if (u.lastSeen) {
-              const ms = u.lastSeen._seconds
-                ? u.lastSeen._seconds * 1000
-                : new Date(u.lastSeen).getTime()
-              return (now - ms) < 30000
-            }
-            return true
-          }))
-        } catch (error) {
-          console.warn('Fetch presence failed:', error)
-        }
-      }
-
-      report()
-      fetchUsers()
-      const interval = setInterval(() => { report(); fetchUsers() }, 5000)
-      return () => clearInterval(interval)
-    }
-
-    // Fallback: direct Firestore client-side presence (requires client Firebase config)
+    // Always use Firestore client SDK directly for presence.
+    // Previously, when API_BASE was set, the app polled Render every 5s
+    // (Nigeria → Oregon → Firestore → back), adding ~500-700ms per poll.
+    // Direct Firestore writes + onSnapshot are real-time and ~4x faster.
     const presenceCollection = collection(db, 'homeos_presence')
     const presenceRef = doc(presenceCollection, presenceId)
 
@@ -511,11 +450,16 @@ export default function App() {
     setLastUpdate(time)
     await saveLocalTasks(optimisticUpdate)
 
-    // Write to backend — do NOT call setChecked on success.
-    // onSnapshot is the single source of truth and updates state
-    // automatically once Firestore confirms the write.
-    // The old code merged stale `checked` with the API delta, which wiped
-    // out concurrent changes from other users (stale-closure bug).
+    // ── Primary: Firestore SDK directly (fast — no round-trip through Render) ──
+    try {
+      await toggleClientTask(key, name, isChecked, time)
+      setConnected(true)
+      return // onSnapshot will sync the confirmed state
+    } catch (error) {
+      console.warn('Firestore SDK toggle failed, trying REST API', error)
+    }
+
+    // ── Fallback: REST API on Render (slower) ──
     try {
       if (!API_BASE) throw new Error('No backend API configured')
       const response = await fetch(`${API_BASE}/api/tasks/toggle`, {
@@ -528,14 +472,6 @@ export default function App() {
       if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
       setConnected(true)
       return // onSnapshot will sync the confirmed state
-    } catch (error) {
-      console.warn('Backend toggle failed, falling back to Firestore client', error)
-    }
-
-    try {
-      await toggleClientTask(key, name)
-      setConnected(true)
-      // onSnapshot will sync the confirmed state
     } catch (error) {
       console.error('All toggle methods failed — reverting', error)
       setConnected(false)
