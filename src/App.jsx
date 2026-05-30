@@ -328,26 +328,25 @@ export default function App() {
     // loaded from localStorage.
     setConnected(true)
 
-    const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, async (snap) => {
-      if (!snap.exists()) {
-        // Document not yet created — load from localStorage so we don't wipe state
-        const local = await loadLocalTasks()
-        if (Object.keys(local).length > 0) setChecked(local)
-        setConnected(true)
-        return
-      }
+    const unsubscribe = onSnapshot(ref, (snap) => {
+      // IMPORTANT: keep this callback synchronous.
+      // An async callback here caused cross-user sync failures:
+      // Firebase ignores the returned Promise, so if two snapshot
+      // events fire in quick succession the second one can overwrite
+      // state before the first async callback finishes.
+      //
+      // Also removed includeMetadataChanges:true — that flag fires for
+      // every internal cache/pending-write status change, not just real
+      // data changes, flooding the callback with stale cached snapshots
+      // and causing Damilare/Olayiwola to miss Joy's real-time updates.
+      if (!snap.exists()) return  // doc not yet created — keep current state
       const data = snap.data()
-      if (!data || Object.keys(data).length === 0) {
-        // Empty Firestore doc — same guard
-        const local = await loadLocalTasks()
-        if (Object.keys(local).length > 0) setChecked(local)
-        setConnected(true)
-        return
-      }
+      if (!data || Object.keys(data).length === 0) return  // empty doc guard
       setChecked(data)
-      saveLocalTasks(data)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
       setConnected(true)
+      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+      // Save to localStorage synchronously (no await needed here)
+      try { localStorage.setItem('homeos_tasks', JSON.stringify(data)) } catch {}
     }, (error) => {
       console.warn('Realtime listener failed:', error)
       setConnected(false)
