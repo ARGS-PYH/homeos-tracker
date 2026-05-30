@@ -287,11 +287,18 @@ export default function App() {
         const contentType = response.headers.get('content-type') || ''
         if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
         const data = await response.json()
-        const finalData = data || {}
-        setChecked(finalData)
-        await saveLocalTasks(finalData)
-        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-        setConnected(true)
+        // Guard: only overwrite state if API returned actual task data.
+        // An empty {} response (e.g. Firestore doc not yet created) must NOT
+        // wipe out localStorage or the current checked state.
+        if (data && Object.keys(data).length > 0) {
+          setChecked(data)
+          await saveLocalTasks(data)
+          setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+          setConnected(true)
+        } else if (Object.keys(cached).length > 0) {
+          setChecked(cached)
+          setConnected(true)
+        }
         return
       } catch (error) {
         clearTimeout(timeout)
@@ -326,8 +333,22 @@ export default function App() {
     if (!authed || !nameSet) return
 
     const ref = doc(db, 'homeos', 'tasks')
-    const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, (snap) => {
-      const data = snap.exists() ? snap.data() : {}
+    const unsubscribe = onSnapshot(ref, { includeMetadataChanges: true }, async (snap) => {
+      if (!snap.exists()) {
+        // Document not yet created — load from localStorage so we don't wipe state
+        const local = await loadLocalTasks()
+        if (Object.keys(local).length > 0) setChecked(local)
+        setConnected(true)
+        return
+      }
+      const data = snap.data()
+      if (!data || Object.keys(data).length === 0) {
+        // Empty Firestore doc — same guard
+        const local = await loadLocalTasks()
+        if (Object.keys(local).length > 0) setChecked(local)
+        setConnected(true)
+        return
+      }
       setChecked(data)
       saveLocalTasks(data)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
@@ -337,25 +358,18 @@ export default function App() {
       setConnected(false)
     })
 
-    const onFocus = () => loadTasks()
-    const onOnline = () => {
-      setConnected(true)
-      loadTasks()
-    }
+    // onFocus no longer calls loadTasks — onSnapshot is live and receives
+    // updates the moment the tab becomes active again.
+    const onOnline = () => { setConnected(true); loadTasks() }
     const onOffline = () => setConnected(false)
 
-    window.addEventListener('focus', onFocus)
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
-
-    // No polling interval — onSnapshot handles all real-time updates.
-    // Polling every 10s was overwriting onSnapshot state with stale API cache data.
 
     loadTasks()
 
     return () => {
       unsubscribe()
-      window.removeEventListener('focus', onFocus)
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
     }
@@ -526,7 +540,15 @@ export default function App() {
     setNameSet(true)
   }
 
-  // ── Auth gate ─────────────────────────────────────────────────────────────
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const logout = () => {
+    sessionStorage.removeItem('homeos_auth')
+    sessionStorage.removeItem('homeos_user_name')
+    setAuthed(false)
+    setUserName('')
+    setNameSet(false)
+    setChecked({})
+  }
   if (!authed) return (
     <PinGate onUnlock={(name) => {
       setAuthed(true)
@@ -606,10 +628,21 @@ export default function App() {
             )}
           </div>
           {/* Name chip — identity is set by PIN, not manually changeable */}
-          <div
-            style={{ fontSize: 12, padding: '4px 10px', background: G_LITE, color: G, borderRadius: 20, fontWeight: 500, cursor: 'default' }}
-          >
-            {userName}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ fontSize: 12, padding: '4px 10px', background: G_LITE, color: G, borderRadius: 20, fontWeight: 500 }}>
+              {userName}
+            </div>
+            <button
+              onClick={logout}
+              title="Switch user"
+              style={{
+                fontSize: 11, padding: '4px 8px', background: 'transparent',
+                color: '#9CA3AF', border: '1px solid #E5E7EB', borderRadius: 20,
+                fontWeight: 500, cursor: 'pointer', lineHeight: 1.4
+              }}
+            >
+              ↩ Exit
+            </button>
           </div>
         </div>
       </div>
