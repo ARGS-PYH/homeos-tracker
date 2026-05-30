@@ -4,7 +4,12 @@ import { db } from './firebase.js'
 import { BUSINESS, DEV } from './data.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const TEAM_PIN = '2604'   // change this to your preferred team PIN
+// Individual PINs — each team member has their own PIN
+const TEAM_MEMBERS = {
+  '3710': 'Animasaun Damilare',
+  '2604': 'Igwemerizi Joy',
+  '7258': 'Odunsi Olayiwola',
+}
 const G        = '#1A6B3C'
 const G_LITE   = '#E8F5EE'
 const AMBER_BG = '#FFFBEB'
@@ -53,9 +58,11 @@ function PinGate({ onUnlock }) {
   const [shake, setShake] = useState(false)
 
   const submit = () => {
-    if (pin === TEAM_PIN) {
+    const member = TEAM_MEMBERS[pin]
+    if (member) {
       sessionStorage.setItem('homeos_auth', '1')
-      onUnlock()
+      sessionStorage.setItem('homeos_user_name', member)
+      onUnlock(member)
     } else {
       setError(true)
       setShake(true)
@@ -71,12 +78,12 @@ function PinGate({ onUnlock }) {
           🏠
         </div>
         <h1 style={{ fontSize: 20, fontWeight: 600, color: '#1A1A1A', marginBottom: 4 }}>HomeOS.ng</h1>
-        <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 1.75 + 'rem' }}>Launch Tracker — Team Access</p>
+        <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 1.75 + 'rem' }}>Enter your personal PIN to continue</p>
 
         <div style={{ animation: shake ? 'shake 0.4s ease' : 'none' }}>
           <input
             type="password"
-            placeholder="Enter team PIN"
+            placeholder="Your PIN"
             value={pin}
             onChange={e => { setPin(e.target.value); setError(false) }}
             onKeyDown={e => e.key === 'Enter' && submit()}
@@ -199,8 +206,8 @@ function Group({ group, gi, tab, checked, onToggle, userName }) {
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [authed, setAuthed]       = useState(() => !!sessionStorage.getItem('homeos_auth'))
-  const [userName, setUserName]   = useState(() => localStorage.getItem('homeos_name') || '')
-  const [nameSet, setNameSet]     = useState(() => !!localStorage.getItem('homeos_name'))
+  const [userName, setUserName]   = useState(() => sessionStorage.getItem('homeos_user_name') || localStorage.getItem('homeos_name') || '')
+  const [nameSet, setNameSet]     = useState(() => !!(sessionStorage.getItem('homeos_user_name') || localStorage.getItem('homeos_name')))
   const [tab, setTab]             = useState('business')
   const [phaseFilter, setPhase]   = useState(0)
   const [checked, setChecked]     = useState({})
@@ -520,7 +527,13 @@ export default function App() {
   }
 
   // ── Auth gate ─────────────────────────────────────────────────────────────
-  if (!authed) return <PinGate onUnlock={() => setAuthed(true)} />
+  if (!authed) return (
+    <PinGate onUnlock={(name) => {
+      setAuthed(true)
+      setUserName(name)
+      setNameSet(true)
+    }} />
+  )
 
   // ── Name gate ─────────────────────────────────────────────────────────────
   if (!nameSet) {
@@ -592,11 +605,9 @@ export default function App() {
               </div>
             )}
           </div>
-          {/* Name chip */}
+          {/* Name chip — identity is set by PIN, not manually changeable */}
           <div
-            onClick={() => { setNameSet(false) }}
-            style={{ fontSize: 12, padding: '4px 10px', background: G_LITE, color: G, borderRadius: 20, fontWeight: 500, cursor: 'pointer' }}
-            title="Click to change name"
+            style={{ fontSize: 12, padding: '4px 10px', background: G_LITE, color: G, borderRadius: 20, fontWeight: 500, cursor: 'default' }}
           >
             {userName}
           </div>
