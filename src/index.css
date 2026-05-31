@@ -32,3 +32,71 @@ input[type="text"], input[type="password"] { font-family: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* ── Mobile responsive ──────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+
+  /* Nav: auto-height, items wrap to two rows */
+  .nav-inner {
+    height: auto !important;
+    flex-wrap: wrap;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+    row-gap: 6px;
+  }
+
+  /* Status (Active / Last action) drops to its own full-width row */
+  .nav-status {
+    order: 3;
+    width: 100%;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 8px !important;
+    flex-wrap: wrap;
+  }
+  .nav-status-line {
+    max-width: 100% !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+    font-size: 10px;
+    color: #6B7280;
+  }
+
+  /* Stats: always 2 × 2 grid on mobile */
+  .stats-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  /* Tab + phase controls: stack vertically, full width */
+  .filter-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .filter-bar > div[style*="flex: 1"] { display: none; } /* hide spacer */
+  .tab-buttons,
+  .phase-buttons {
+    display: flex;
+    width: 100%;
+  }
+  .tab-buttons > button,
+  .phase-buttons > button {
+    flex: 1;
+    justify-content: center !important;
+    text-align: center;
+  }
+
+  /* Tighter padding on mobile */
+  .main-content  { padding: 1rem 0.875rem !important; }
+  .nav-content   { padding: 0 0.875rem !important; }
+  .task-group    { padding: 0 12px !important; }
+  .group-header  { padding: 10px 12px !important; }
+}
+
+/* Very small phones (≤380px) */
+@media (max-width: 380px) {
+  .stats-grid       { grid-template-columns: 1fr 1fr !important; }
+  .nav-status-line  { font-size: 9px !important; }
+  .main-content     { padding: 0.875rem 0.75rem !important; }
+}

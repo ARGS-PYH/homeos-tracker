@@ -141,7 +141,7 @@ function Group({ group, gi, tab, checked, onToggle, userName }) {
       transition: 'border-color 0.2s'
     }}>
       {/* Header */}
-      <div style={{
+      <div className="group-header" style={{
         padding: '10px 16px',
         display: 'flex', alignItems: 'center', gap: 10,
         background: allDone ? G_LITE : '#F9FAFB',
@@ -161,7 +161,7 @@ function Group({ group, gi, tab, checked, onToggle, userName }) {
       </div>
 
       {/* Progress */}
-      <div style={{ padding: '0 16px' }}>
+      <div className="task-group" style={{ padding: '0 16px' }}>
         <Bar done={done} total={group.items.length} height={3} />
       </div>
 
@@ -622,23 +622,23 @@ export default function App() {
         backdropFilter: 'blur(8px)',
         WebkitBackdropFilter: 'blur(8px)'
       }}>
-        <div style={{ maxWidth: 860, margin: '0 auto', padding: '0 1.25rem', height: 56, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div className="nav-inner nav-content" style={{ maxWidth: 860, margin: '0 auto', padding: '0 1.25rem', height: 56, display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 28, height: 28, background: G, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, color: '#fff', fontWeight: 700 }}>H</div>
           <span style={{ fontWeight: 600, fontSize: 15, color: '#1A1A1A' }}>HomeOS.ng</span>
           <span style={{ fontSize: 13, color: '#9CA3AF' }}>Launch Tracker</span>
           <div style={{ flex: 1 }} />
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+          <div className="nav-status" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: connected ? '#059669' : '#EF4444' }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? '#059669' : '#EF4444' }} />
               {connected ? (lastUpdate ? `Updated ${lastUpdate}` : 'Live') : (showReconnect ? 'Reconnecting...' : 'Connecting...')}
             </div>
             {activeUsers.length > 0 && (
-              <div style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
+              <div className="nav-status-line" style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
                 Active: {activeUsers.map((u) => u.name).join(', ')}
               </div>
             )}
             {lastAction && (
-              <div style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
+              <div className="nav-status-line" style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
                 Last action: {lastAction.by} checked "{lastAction.taskLabel}" at {lastAction.at}
               </div>
             )}
@@ -663,10 +663,10 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 860, margin: '0 auto', padding: '1.5rem 1.25rem' }}>
+      <div className="main-content" style={{ maxWidth: 860, margin: '0 auto', padding: '1.5rem 1.25rem' }}>
 
         {/* Summary cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: '1.5rem' }}>
+        <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: '1.5rem' }}>
           {[
             { label: 'Total tasks', value: aKeys.length, sub: `${totalDone} done` },
             { label: 'Overall', value: `${pct(totalDone, aKeys.length)}%`, sub: tab === 'business' ? 'Business' : 'Dev' },
@@ -691,9 +691,9 @@ export default function App() {
         </div>
 
         {/* Tab + phase controls */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: '1.25rem', alignItems: 'center' }}>
+        <div className="filter-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: '1.25rem', alignItems: 'center' }}>
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="tab-buttons" style={{ display: 'flex', gap: 6 }}>
             {[['business', '💼', 'Business'], ['dev', '💻', 'Dev & Product']].map(([id, emoji, label]) => (
               <button key={id} onClick={() => { setTab(id); setPhase(0) }} style={{
                 display: 'flex', alignItems: 'center', gap: 6,
@@ -708,7 +708,7 @@ export default function App() {
           </div>
           <div style={{ flex: 1 }} />
           {/* Phase filter */}
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="phase-buttons" style={{ display: 'flex', gap: 6 }}>
             {[[0, 'All'], [1, 'Phase 1'], [2, 'Phase 2']].map(([v, label]) => (
               <button key={v} onClick={() => setPhase(v)} style={{
                 padding: '5px 12px', borderRadius: 20, fontSize: 12,
