@@ -219,17 +219,7 @@ export default function App() {
       return raw ? JSON.parse(raw) : {}
     } catch { return {} }
   })
-  const [connected, setConnected] = useState(() => {
-    // If we have cached tasks in localStorage, show Online immediately
-    // rather than flashing "Connecting..." on every page load.
-    // onSnapshot will correct this to the real value within milliseconds.
-    try {
-      const raw = localStorage.getItem('homeos_tasks')
-      if (!raw) return false
-      const data = JSON.parse(raw)
-      return !!(data && Object.keys(data).length > 0)
-    } catch { return false }
-  })
+  const [connected, setConnected] = useState(false)
   const [showReconnect, setShowReconnect] = useState(false)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [lastAction, setLastAction] = useState(null)
@@ -270,6 +260,7 @@ export default function App() {
     const update = {
       [key]: isChecked,
       [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+      _ts: serverTimestamp(),
     }
     await setDoc(ref, update, { merge: true })
   }, [])
@@ -331,22 +322,25 @@ export default function App() {
   useEffect(() => {
     if (!authed || !nameSet) return
 
-    setConnected(true)
-
     let unsubscribe = () => {}
     if (isFirebaseConfigured && db) {
       const ref = doc(db, 'homeos', 'tasks')
       unsubscribe = onSnapshot(ref, (snap) => {
+        setConnected(true)
         if (!snap.exists()) return
         const data = snap.data()
-        if (!data || Object.keys(data).length === 0) return
+        if (!data || Object.keys(data).length === 0) {
+          setChecked({})
+          try { localStorage.removeItem('homeos_tasks') } catch {}
+          return
+        }
         const { _ts, ...tasks } = data
         setChecked(tasks)
-        setConnected(true)
         setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
         try { localStorage.setItem('homeos_tasks', JSON.stringify(tasks)) } catch {}
       }, (error) => {
         console.error('Realtime listener error:', error)
+        setConnected(false)
       })
     }
 
@@ -357,9 +351,19 @@ export default function App() {
     // Uses _ts (server timestamp ms) to avoid overwriting newer local state.
     let lastPolledTs = 0
     const poll = async () => {
+      if (isFirebaseConfigured && !API_BASE) return
       try {
         const r = await fetch(apiUrl('/api/tasks'), { signal: AbortSignal.timeout(4000) })
-        if (!r.ok) return
+        if (!r.ok) {
+          setConnected(false)
+          return
+        }
+        const contentType = r.headers.get('content-type') || ''
+        if (!contentType.includes('application/json')) {
+          setConnected(false)
+          return
+        }
+        setConnected(true)
         const data = await r.json()
         const serverTs = typeof data._ts === 'number' ? data._ts : 0
         if (serverTs > lastPolledTs) {
@@ -372,13 +376,15 @@ export default function App() {
             try { localStorage.setItem('homeos_tasks', JSON.stringify(tasks)) } catch {}
           }
         }
-      } catch { /* silent */ }
+      } catch {
+        setConnected(false)
+      }
     }
     poll() // immediate on mount
     const pollInterval = setInterval(poll, 3000)
 
     const onOffline = () => setConnected(false)
-    const onOnline  = () => { setConnected(true); poll() }
+    const onOnline  = () => { poll() }
     window.addEventListener('offline', onOffline)
     window.addEventListener('online',  onOnline)
 
@@ -510,11 +516,18 @@ export default function App() {
     // REST API (admin SDK + correct creds) is the guaranteed path.
     // Client SDK runs in parallel as a speed bonus when it works.
     // Only revert if BOTH fail.
-    const apiWrite = fetch(apiUrl('/api/tasks/toggle'), {
+    const shouldUseApiWrite = API_BASE || !isFirebaseConfigured || ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    const apiWrite = shouldUseApiWrite
+      ? fetch(apiUrl('/api/tasks/toggle'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, userName: name, isChecked })
-        }).then(r => { if (!r.ok) throw new Error(`API ${r.status}`) })
+        }).then(r => {
+          if (!r.ok) throw new Error(`API ${r.status}`)
+          const contentType = r.headers.get('content-type') || ''
+          if (!contentType.includes('application/json')) throw new Error('API returned non-JSON response')
+        })
+      : Promise.reject(new Error('API write disabled; using Firestore client'))
 
     const sdkWrite = toggleClientTask(key, name, isChecked, time)
 
@@ -615,9 +628,9 @@ export default function App() {
           <span style={{ fontSize: 13, color: '#9CA3AF' }}>Launch Tracker</span>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: connected || showReconnect ? '#059669' : '#EF4444' }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: connected || showReconnect ? '#059669' : '#EF4444' }} />
-              {connected ? (lastUpdate ? `Updated ${lastUpdate}` : 'Live') : (showReconnect ? 'Online' : 'Connecting...')}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: connected ? '#059669' : '#EF4444' }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? '#059669' : '#EF4444' }} />
+              {connected ? (lastUpdate ? `Updated ${lastUpdate}` : 'Live') : (showReconnect ? 'Reconnecting...' : 'Connecting...')}
             </div>
             {activeUsers.length > 0 && (
               <div style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240 }}>
