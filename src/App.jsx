@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { doc, onSnapshot, setDoc, getDoc, collection, query, orderBy, serverTimestamp } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { db, isFirebaseConfigured } from './firebase.js'
 import { BUSINESS, DEV } from './data.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -15,6 +15,7 @@ const G_LITE   = '#E8F5EE'
 const AMBER_BG = '#FFFBEB'
 const AMBER    = '#D97706'
 const API_BASE = import.meta.env.VITE_API_URL || ''
+const apiUrl = (path) => `${API_BASE}${path}`
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const taskKey  = (tab, gi, ii) => `${tab}__${gi}__${ii}`
@@ -248,6 +249,7 @@ export default function App() {
   }, [])
 
   const loadClientTasks = useCallback(async () => {
+    if (!isFirebaseConfigured || !db) return null
     const ref = doc(db, 'homeos', 'tasks')
     const snap = await getDoc(ref)
     return snap.exists() ? snap.data() : null
@@ -258,6 +260,9 @@ export default function App() {
   }, [loadLocalTasks])
 
   const toggleClientTask = useCallback(async (key, name, isChecked, time) => {
+    if (!isFirebaseConfigured || !db) {
+      throw new Error('Firebase client is not configured')
+    }
     // Single Firestore write with merge — no read needed since we already
     // know isChecked from the checked state. Previously this did getDoc +
     // setDoc (full document overwrite), which was 2x slower.
@@ -293,10 +298,9 @@ export default function App() {
 
     // ── Fallback: REST API on Render (slower — extra round-trip through Oregon) ──
     try {
-      if (!API_BASE) throw new Error('No backend API configured')
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 5000)
-      const response = await fetch(`${API_BASE}/api/tasks`, { signal: controller.signal })
+      const response = await fetch(apiUrl('/api/tasks'), { signal: controller.signal })
       clearTimeout(timeout)
       if (!response.ok) throw new Error('Failed to load tasks')
       const contentType = response.headers.get('content-type') || ''
@@ -327,22 +331,24 @@ export default function App() {
   useEffect(() => {
     if (!authed || !nameSet) return
 
-    const ref = doc(db, 'homeos', 'tasks')
     setConnected(true)
 
-    // onSnapshot: real-time when client SDK is correctly configured
-    const unsubscribe = onSnapshot(ref, (snap) => {
-      if (!snap.exists()) return
-      const data = snap.data()
-      if (!data || Object.keys(data).length === 0) return
-      const { _ts, ...tasks } = data
-      setChecked(tasks)
-      setConnected(true)
-      setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      try { localStorage.setItem('homeos_tasks', JSON.stringify(tasks)) } catch {}
-    }, (error) => {
-      console.error('Realtime listener error:', error)
-    })
+    let unsubscribe = () => {}
+    if (isFirebaseConfigured && db) {
+      const ref = doc(db, 'homeos', 'tasks')
+      unsubscribe = onSnapshot(ref, (snap) => {
+        if (!snap.exists()) return
+        const data = snap.data()
+        if (!data || Object.keys(data).length === 0) return
+        const { _ts, ...tasks } = data
+        setChecked(tasks)
+        setConnected(true)
+        setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+        try { localStorage.setItem('homeos_tasks', JSON.stringify(tasks)) } catch {}
+      }, (error) => {
+        console.error('Realtime listener error:', error)
+      })
+    }
 
     // REST API polling every 3 seconds — the guaranteed sync path.
     // This ensures all users stay in sync even when the Firebase client SDK
@@ -351,9 +357,8 @@ export default function App() {
     // Uses _ts (server timestamp ms) to avoid overwriting newer local state.
     let lastPolledTs = 0
     const poll = async () => {
-      if (!API_BASE) return
       try {
-        const r = await fetch(`${API_BASE}/api/tasks`, { signal: AbortSignal.timeout(4000) })
+        const r = await fetch(apiUrl('/api/tasks'), { signal: AbortSignal.timeout(4000) })
         if (!r.ok) return
         const data = await r.json()
         const serverTs = typeof data._ts === 'number' ? data._ts : 0
@@ -401,6 +406,40 @@ export default function App() {
     if (!authed || !nameSet || !userName) return
 
     const presenceId = userName.trim().replace(/\s+/g, '_').toLowerCase()
+
+    if (!isFirebaseConfigured || !db) {
+      const updatePresence = async () => {
+        try {
+          await fetch(apiUrl('/api/presence/report'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: presenceId, name: userName, tab }),
+          })
+        } catch (error) {
+          console.warn('Presence update failed:', error)
+        }
+      }
+
+      const loadPresence = async () => {
+        try {
+          const response = await fetch(apiUrl('/api/presence'))
+          if (!response.ok) return
+          setActiveUsers(await response.json())
+        } catch (error) {
+          console.warn('Presence load failed:', error)
+        }
+      }
+
+      updatePresence()
+      loadPresence()
+      const presenceInterval = setInterval(updatePresence, 5000)
+      const loadInterval = setInterval(loadPresence, 5000)
+
+      return () => {
+        clearInterval(presenceInterval)
+        clearInterval(loadInterval)
+      }
+    }
 
     // Always use Firestore client SDK directly for presence.
     // Previously, when API_BASE was set, the app polled Render every 5s
@@ -471,13 +510,11 @@ export default function App() {
     // REST API (admin SDK + correct creds) is the guaranteed path.
     // Client SDK runs in parallel as a speed bonus when it works.
     // Only revert if BOTH fail.
-    const apiWrite = API_BASE
-      ? fetch(`${API_BASE}/api/tasks/toggle`, {
+    const apiWrite = fetch(apiUrl('/api/tasks/toggle'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ key, userName: name, isChecked })
         }).then(r => { if (!r.ok) throw new Error(`API ${r.status}`) })
-      : Promise.reject(new Error('No API_BASE'))
 
     const sdkWrite = toggleClientTask(key, name, isChecked, time)
 

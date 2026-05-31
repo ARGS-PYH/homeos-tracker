@@ -8,6 +8,17 @@ let serviceAccountText = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIR
 const serviceAccountFile = process.env.FIREBASE_SERVICE_ACCOUNT_FILE
 let serviceAccount = null
 
+if (!serviceAccountText && fs.existsSync('.env')) {
+  try {
+    const rawEnv = fs.readFileSync('.env', 'utf8').trim()
+    if (rawEnv.startsWith('{')) {
+      serviceAccountText = rawEnv
+    }
+  } catch (error) {
+    console.error('Could not inspect local .env file:', error)
+  }
+}
+
 if (!serviceAccountText && serviceAccountFile) {
   try {
     serviceAccountText = fs.readFileSync(serviceAccountFile, 'utf8')
