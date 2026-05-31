@@ -330,35 +330,56 @@ export default function App() {
     const ref = doc(db, 'homeos', 'tasks')
     setConnected(true)
 
-    // onSnapshot is the SOLE source of truth for remote state.
-    //
-    // Previously loadTasks() (getDoc / REST API) was also calling setChecked,
-    // racing against onSnapshot and overwriting other users' changes with
-    // stale cached data. That was why Joy's checks never appeared for Damilare.
-    //
-    // Now: checked is initialised synchronously from localStorage (fast first
-    // render), then onSnapshot takes over and is the only thing that updates
-    // state from Firestore for the lifetime of the session.
+    // onSnapshot: real-time when client SDK is correctly configured
     const unsubscribe = onSnapshot(ref, (snap) => {
       if (!snap.exists()) return
       const data = snap.data()
       if (!data || Object.keys(data).length === 0) return
-      setChecked(data)
+      const { _ts, ...tasks } = data
+      setChecked(tasks)
       setConnected(true)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      try { localStorage.setItem('homeos_tasks', JSON.stringify(data)) } catch {}
+      try { localStorage.setItem('homeos_tasks', JSON.stringify(tasks)) } catch {}
     }, (error) => {
       console.error('Realtime listener error:', error)
-      setConnected(false)
     })
 
+    // REST API polling every 3 seconds — the guaranteed sync path.
+    // This ensures all users stay in sync even when the Firebase client SDK
+    // is misconfigured or writes to the wrong project (a common issue when
+    // VITE_FIREBASE_* env vars are missing from the production build).
+    // Uses _ts (server timestamp ms) to avoid overwriting newer local state.
+    let lastPolledTs = 0
+    const poll = async () => {
+      if (!API_BASE) return
+      try {
+        const r = await fetch(`${API_BASE}/api/tasks`, { signal: AbortSignal.timeout(4000) })
+        if (!r.ok) return
+        const data = await r.json()
+        const serverTs = typeof data._ts === 'number' ? data._ts : 0
+        if (serverTs > lastPolledTs) {
+          lastPolledTs = serverTs
+          const { _ts, ...tasks } = data
+          if (Object.keys(tasks).length > 0) {
+            setChecked(tasks)
+            setConnected(true)
+            setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
+            try { localStorage.setItem('homeos_tasks', JSON.stringify(tasks)) } catch {}
+          }
+        }
+      } catch { /* silent */ }
+    }
+    poll() // immediate on mount
+    const pollInterval = setInterval(poll, 3000)
+
     const onOffline = () => setConnected(false)
-    const onOnline  = () => setConnected(true)  // onSnapshot auto-resumes — no reload needed
+    const onOnline  = () => { setConnected(true); poll() }
     window.addEventListener('offline', onOffline)
     window.addEventListener('online',  onOnline)
 
     return () => {
       unsubscribe()
+      clearInterval(pollInterval)
       window.removeEventListener('offline', onOffline)
       window.removeEventListener('online',  onOnline)
     }
@@ -434,59 +455,47 @@ export default function App() {
       ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
     const isChecked = !checked[key]
 
-    // Optimistic update — instant UI feedback while the write is in flight.
-    // Using functional setState so this always merges onto the latest state,
-    // not the stale closure value of `checked`.
-    let optimisticUpdate
-    setChecked(prev => {
-      optimisticUpdate = {
-        ...prev,
-        [key]: isChecked,
-        [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
-      }
-      return optimisticUpdate
-    })
-    setLastUpdate(time)
-    // Save optimistic state to localStorage for offline resilience
-    try { localStorage.setItem('homeos_tasks', JSON.stringify({
-      ...checked,
+    // Optimistic update — instant UI feedback
+    setChecked(prev => ({
+      ...prev,
       [key]: isChecked,
+      [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+    }))
+    setLastUpdate(time)
+    try { localStorage.setItem('homeos_tasks', JSON.stringify({
+      ...checked, [key]: isChecked,
       [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
     })) } catch {}
 
-    // ── Primary: Firestore SDK directly (fast — no round-trip through Render) ──
-    try {
-      await toggleClientTask(key, name, isChecked, time)
-      setConnected(true)
-      return // onSnapshot will sync the confirmed state
-    } catch (error) {
-      console.warn('Firestore SDK toggle failed, trying REST API', error)
-    }
+    // Fire BOTH write paths simultaneously.
+    // REST API (admin SDK + correct creds) is the guaranteed path.
+    // Client SDK runs in parallel as a speed bonus when it works.
+    // Only revert if BOTH fail.
+    const apiWrite = API_BASE
+      ? fetch(`${API_BASE}/api/tasks/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key, userName: name, isChecked })
+        }).then(r => { if (!r.ok) throw new Error(`API ${r.status}`) })
+      : Promise.reject(new Error('No API_BASE'))
 
-    // ── Fallback: REST API on Render (slower) ──
-    try {
-      if (!API_BASE) throw new Error('No backend API configured')
-      const response = await fetch(`${API_BASE}/api/tasks/toggle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, userName: name, isChecked })
-      })
-      if (!response.ok) throw new Error('Failed to toggle task')
-      const contentType = response.headers.get('content-type') || ''
-      if (!contentType.includes('application/json')) throw new Error('Invalid backend response')
+    const sdkWrite = toggleClientTask(key, name, isChecked, time)
+
+    const results = await Promise.allSettled([apiWrite, sdkWrite])
+    const anyOk = results.some(r => r.status === 'fulfilled')
+
+    if (anyOk) {
       setConnected(true)
-      return // onSnapshot will sync the confirmed state
-    } catch (error) {
-      console.error('All toggle methods failed — reverting', error)
+    } else {
+      console.error('All write paths failed — reverting', results.map(r => r.reason))
       setConnected(false)
-      // Revert the optimistic update since nothing was saved
-      setChecked((current) => ({
-        ...current,
+      setChecked(prev => ({
+        ...prev,
         [key]: !isChecked,
-        [`${key}__meta`]: current[`${key}__meta`] ?? null,
+        [`${key}__meta`]: prev[`${key}__meta`] ?? null,
       }))
     }
-  }, [saveLocalTasks, toggleClientTask])
+  }, [checked, saveLocalTasks, toggleClientTask])
 
   // ── Name setup ────────────────────────────────────────────────────────────
   const saveName = (n) => {

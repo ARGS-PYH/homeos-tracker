@@ -1,4 +1,5 @@
 import { db, taskCache } from '../firebaseAdmin.js'
+import admin from 'firebase-admin'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,6 +29,7 @@ export default async function handler(req, res) {
     const update = {
       [key]: isChecked,
       [`${key}__meta`]: isChecked ? { by: userName || 'Team', at: time } : null,
+      _ts: admin.firestore.FieldValue.serverTimestamp(),
     }
 
     await ref.set(update, { merge: true })
