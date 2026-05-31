@@ -210,7 +210,14 @@ export default function App() {
   const [nameSet, setNameSet]     = useState(() => !!(sessionStorage.getItem('homeos_user_name') || localStorage.getItem('homeos_name')))
   const [tab, setTab]             = useState('business')
   const [phaseFilter, setPhase]   = useState(0)
-  const [checked, setChecked]     = useState({})
+  const [checked, setChecked]     = useState(() => {
+    // Initialise synchronously so the UI shows cached progress
+    // before onSnapshot fires (usually < 1 second).
+    try {
+      const raw = localStorage.getItem('homeos_tasks')
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
   const [connected, setConnected] = useState(() => {
     // If we have cached tasks in localStorage, show Online immediately
     // rather than flashing "Connecting..." on every page load.
@@ -321,53 +328,41 @@ export default function App() {
     if (!authed || !nameSet) return
 
     const ref = doc(db, 'homeos', 'tasks')
-
-    // Mark as connected the moment the Firestore subscription is established.
-    // Previously this only happened inside the onSnapshot callback (after first
-    // data event), causing "Connecting..." to show even when data was already
-    // loaded from localStorage.
     setConnected(true)
 
+    // onSnapshot is the SOLE source of truth for remote state.
+    //
+    // Previously loadTasks() (getDoc / REST API) was also calling setChecked,
+    // racing against onSnapshot and overwriting other users' changes with
+    // stale cached data. That was why Joy's checks never appeared for Damilare.
+    //
+    // Now: checked is initialised synchronously from localStorage (fast first
+    // render), then onSnapshot takes over and is the only thing that updates
+    // state from Firestore for the lifetime of the session.
     const unsubscribe = onSnapshot(ref, (snap) => {
-      // IMPORTANT: keep this callback synchronous.
-      // An async callback here caused cross-user sync failures:
-      // Firebase ignores the returned Promise, so if two snapshot
-      // events fire in quick succession the second one can overwrite
-      // state before the first async callback finishes.
-      //
-      // Also removed includeMetadataChanges:true — that flag fires for
-      // every internal cache/pending-write status change, not just real
-      // data changes, flooding the callback with stale cached snapshots
-      // and causing Damilare/Olayiwola to miss Joy's real-time updates.
-      if (!snap.exists()) return  // doc not yet created — keep current state
+      if (!snap.exists()) return
       const data = snap.data()
-      if (!data || Object.keys(data).length === 0) return  // empty doc guard
+      if (!data || Object.keys(data).length === 0) return
       setChecked(data)
       setConnected(true)
       setLastUpdate(new Date().toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' }))
-      // Save to localStorage synchronously (no await needed here)
       try { localStorage.setItem('homeos_tasks', JSON.stringify(data)) } catch {}
     }, (error) => {
-      console.warn('Realtime listener failed:', error)
+      console.error('Realtime listener error:', error)
       setConnected(false)
     })
 
-    // onFocus no longer calls loadTasks — onSnapshot is live and receives
-    // updates the moment the tab becomes active again.
-    const onOnline = () => { setConnected(true); loadTasks() }
     const onOffline = () => setConnected(false)
-
-    window.addEventListener('online', onOnline)
+    const onOnline  = () => setConnected(true)  // onSnapshot auto-resumes — no reload needed
     window.addEventListener('offline', onOffline)
-
-    loadTasks()
+    window.addEventListener('online',  onOnline)
 
     return () => {
       unsubscribe()
-      window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
+      window.removeEventListener('online',  onOnline)
     }
-  }, [authed, nameSet, loadTasks, saveLocalTasks])
+  }, [authed, nameSet])
 
   useEffect(() => {
     if (!authed || !nameSet) return
@@ -439,15 +434,25 @@ export default function App() {
       ' ' + now.toLocaleTimeString('en-NG', { hour: '2-digit', minute: '2-digit' })
     const isChecked = !checked[key]
 
-    // Optimistic update — instant UI feedback while the write is in flight
-    const optimisticUpdate = {
+    // Optimistic update — instant UI feedback while the write is in flight.
+    // Using functional setState so this always merges onto the latest state,
+    // not the stale closure value of `checked`.
+    let optimisticUpdate
+    setChecked(prev => {
+      optimisticUpdate = {
+        ...prev,
+        [key]: isChecked,
+        [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
+      }
+      return optimisticUpdate
+    })
+    setLastUpdate(time)
+    // Save optimistic state to localStorage for offline resilience
+    try { localStorage.setItem('homeos_tasks', JSON.stringify({
       ...checked,
       [key]: isChecked,
       [`${key}__meta`]: isChecked ? { by: name || 'Team', at: time } : null,
-    }
-    setChecked(optimisticUpdate)
-    setLastUpdate(time)
-    await saveLocalTasks(optimisticUpdate)
+    })) } catch {}
 
     // ── Primary: Firestore SDK directly (fast — no round-trip through Render) ──
     try {
@@ -481,7 +486,7 @@ export default function App() {
         [`${key}__meta`]: current[`${key}__meta`] ?? null,
       }))
     }
-  }, [checked, saveLocalTasks, toggleClientTask])
+  }, [saveLocalTasks, toggleClientTask])
 
   // ── Name setup ────────────────────────────────────────────────────────────
   const saveName = (n) => {
