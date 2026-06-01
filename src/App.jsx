@@ -7,7 +7,6 @@ import { BUSINESS, DEV } from './data.js'
 // Individual PINs — each team member has their own PIN
 const TEAM_MEMBERS = {
   '3710': 'Animasaun Damilare',
-  '2604': 'Igwemerizi Joy',
   '7258': 'Odunsi Olayiwola',
 }
 const G        = '#1A6B3C'
