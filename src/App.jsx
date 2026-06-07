@@ -208,6 +208,52 @@ function Group({ group, gi, tab, checked, onToggle, userName, editMode, onUpdate
   )
 }
 
+function Countdown() {
+  const targetDate = new Date('2026-08-15T00:00:00').getTime();
+  const [timeLeft, setTimeLeft] = useState(targetDate - Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeLeft(targetDate - Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [targetDate]);
+
+  const days = Math.floor(timeLeft / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((timeLeft % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000);
+
+  if (timeLeft < 0) {
+    return (
+      <div style={{ background: '#fff', border: `1px solid ${G}`, borderRadius: 10, padding: '14px 16px', marginBottom: '1.5rem', textAlign: 'center' }}>
+        <h2 style={{ fontSize: 20, fontWeight: 600, color: G, margin: 0 }}>🚀 It's Launch Day!</h2>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '14px 16px', marginBottom: '1.5rem', textAlign: 'center' }}>
+      <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Countdown to Launch (Aug 15)</div>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 16 }}>
+        {[
+          { label: 'Days', value: days },
+          { label: 'Hours', value: hours },
+          { label: 'Mins', value: minutes },
+          { label: 'Secs', value: seconds },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 48 }}>
+            <div style={{ fontSize: 28, fontWeight: 700, color: '#1A1A1A', lineHeight: 1, fontFamily: 'monospace' }}>
+              {value.toString().padStart(2, '0')}
+            </div>
+            <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [authed, setAuthed]       = useState(() => !!sessionStorage.getItem('homeos_auth'))
   const [userName, setUserName]   = useState(() => sessionStorage.getItem('homeos_user_name') || localStorage.getItem('homeos_name') || '')
@@ -529,6 +575,8 @@ export default function App() {
       </div>
 
       <div className="main-content" style={{ maxWidth: 860, margin: '0 auto', padding: '1.5rem 1.25rem' }}>
+        <Countdown />
+
         <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: '1.5rem' }}>
           {[
             { label: 'Total tasks', value: aKeys.length, sub: `${totalDone} done` },
